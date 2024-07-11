@@ -5,6 +5,7 @@ import torch.backends.cudnn as cudnn
 cudnn.benchmark =True
 from collections import OrderedDict
 
+
 parser = argparse.ArgumentParser(description='PyTorch SVHN Example')
 parser.add_argument('--type', default='cifar10', help='|'.join(selector.known_models))
 parser.add_argument('--quant_method', default='linear', help='linear|minmax|log|tanh')
@@ -24,7 +25,14 @@ parser.add_argument('--fwd_bits', type=int, default=8, help='bit-width for layer
 parser.add_argument('--overflow_rate', type=float, default=0.0, help='overflow rate')
 args = parser.parse_args()
 
-args.gpu = misc.auto_select_gpu(utility_bound=0, num_gpu=args.ngpu, selected_gpus=args.gpu)
+
+if torch.cuda.is_available():
+    print("CUDA is available. PyTorch can use the GPU.")
+    print("Device Name: {}".format(torch.cuda.get_device_name(0)))
+else:
+    print("CUDA is not available. PyTorch cannot use the GPU.")
+
+args.gpu = misc.auto_select_gpu(utility_bound=50, num_gpu=args.ngpu, selected_gpus=args.gpu)
 args.ngpu = len(args.gpu)
 misc.ensure_dir(args.logdir)
 args.model_root = misc.expand_user(args.model_root)
@@ -40,8 +48,38 @@ assert torch.cuda.is_available(), 'no cuda'
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 
+
+class gen_model(torch.nn.Module):
+    def __init__(self):
+        super(gen_model, self).__init__()
+        # 1 input channel (grayscale), 20 output channels, 5x5 kernel
+        self.conv1 = torch.nn.Conv2d(1, 20, 5)
+        # 20 input channels, 50 output channels, 5x5 kernel
+        self.conv2 = torch.nn.Conv2d(20, 50, 5)
+        # 4*4*50 input features, 500 output features
+        self.fc1 = torch.nn.Linear(4*4*50, 500)
+        # 500 input features, 10 output features (10 classes for MNIST)
+        self.fc2 = torch.nn.Linear(500, 10)
+
+    def forward(self, x):
+        x = torch.relu(self.conv1(x))
+        x = torch.max_pool2d(x, 2)  # Max pooling over a (2, 2) window
+        x = torch.relu(self.conv2(x))
+        x = torch.max_pool2d(x, 2)  # Max pooling over a (2, 2) window
+        x = x.view(-1, 4*4*50)  # Flatten the tensor
+        x = torch.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+
 # load model and dataset fetcher
-model_raw, ds_fetcher, is_imagenet = selector.select(args.type, model_root=args.model_root)
+if args.type == "special":
+    model_raw = gen_model()
+    from mnist import dataset
+    ds_fetcher = dataset.get
+    is_imagenet = False
+else:
+    model_raw, ds_fetcher, is_imagenet = selector.select(args.type, model_root=args.model_root)
 args.ngpu = args.ngpu if is_imagenet else 1
 
 # quantize parameters
@@ -49,6 +87,7 @@ if args.param_bits < 32:
     state_dict = model_raw.state_dict()
     state_dict_quant = OrderedDict()
     sf_dict = OrderedDict()
+
     for k, v in state_dict.items():
         if 'running' in k:
             if args.bn_bits >=32:
@@ -90,6 +129,7 @@ print(model_raw)
 res_str = "type={}, quant_method={}, param_bits={}, bn_bits={}, fwd_bits={}, overflow_rate={}, acc1={:.4f}, acc5={:.4f}".format(
     args.type, args.quant_method, args.param_bits, args.bn_bits, args.fwd_bits, args.overflow_rate, acc1, acc5)
 print(res_str)
+
 with open('acc1_acc5.txt', 'a') as f:
     f.write(res_str + '\n')
 

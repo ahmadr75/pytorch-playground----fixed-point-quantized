@@ -54,34 +54,78 @@ def dump_pickle(obj, path):
         print("Dumping pickle object to {}".format(path))
         pkl.dump(obj, f, protocol=pkl.HIGHEST_PROTOCOL)
 
-def auto_select_gpu(mem_bound=500, utility_bound=0, gpus=(0, 1, 2, 3, 4, 5, 6, 7), num_gpu=1, selected_gpus=None):
+
+def auto_select_gpu(mem_bound=1000, utility_bound=50, gpus=(0, 1, 2, 3, 4, 5, 6, 7), num_gpu=1, selected_gpus=None):
     import sys
     import os
     import subprocess
     import re
     import time
     import numpy as np
-    if 'CUDA_VISIBLE_DEVCIES' in os.environ:
+
+    if 'CUDA_VISIBLE_DEVICES' in os.environ:
         sys.exit(0)
+
     if selected_gpus is None:
         mem_trace = []
         utility_trace = []
-        for i in range(5): # sample 5 times
-            info = subprocess.check_output('nvidia-smi', shell=True).decode('utf-8')
-            mem = [int(s[:-5]) for s in re.compile('\d+MiB\s/').findall(info)]
-            utility = [int(re.compile('\d+').findall(s)[0]) for s in re.compile('\d+%\s+Default').findall(info)]
-            mem_trace.append(mem)
-            utility_trace.append(utility)
+
+        for _ in range(5):  # sample 5 times
+            try:
+                nvidia_output = subprocess.check_output(
+                    'nvidia-smi', shell=True).decode('utf-8')
+            except subprocess.CalledProcessError as e:
+                print("Error running nvidia-smi: {}".format(e))
+                sys.exit(1)
+
+            # Improved regex for memory usage
+            mem_usage = [int(m) for m in re.findall(
+                r"(\d+)MiB\s+/", nvidia_output)]
+            gpu_usage = [int(u) for u in re.findall(
+                r"(\d+)%\s+Default", nvidia_output)]
+
+            # Debug: Print memory and utility usage each sample
+            print("Memory usage sample: {}".format(mem_usage))
+            print("GPU usage sample: {}".format(gpu_usage))
+
+            mem_trace.append(mem_usage)
+            utility_trace.append(gpu_usage)
             time.sleep(0.1)
+
         mem = np.mean(mem_trace, axis=0)
         utility = np.mean(utility_trace, axis=0)
-        assert(len(mem) == len(utility))
+
+        # Debug: Print average memory and utility usage
+        print("Average Memory usage: {}".format(mem))
+        print("Average GPU usage: {}".format(utility))
+
+        if len(mem) != len(utility):
+            print("Error: Memory and utility lengths do not match")
+            sys.exit(1)
+
         nGPU = len(utility)
-        ideal_gpus = [i for i in range(nGPU) if mem[i] <= mem_bound and utility[i] <= utility_bound and i in gpus]
+
+        # Debug: Print the conditions for each GPU
+        for i in range(nGPU):
+            print("GPU {}: Memory {} MiB, Utility {}%".format(
+                i, mem[i], utility[i]))
+
+        ideal_gpus = []
+        for i in range(nGPU):
+            if mem[i] <= mem_bound and utility[i] <= utility_bound and i in gpus:
+                ideal_gpus.append(i)
+            else:
+                print("GPU {} does not meet the criteria: Memory <= {}: {}, Utility <= {}: {}, in gpus: {}".format(
+                    i, mem_bound, mem[i] <= mem_bound, utility_bound, utility[i] <= utility_bound, i in gpus
+                ))
+
+        # Debug: Print the selection process
+        print("Ideal GPUs based on memory and utility bounds: {}".format(ideal_gpus))
 
         if len(ideal_gpus) < num_gpu:
-            print("No sufficient resource, available: {}, require {} gpu".format(ideal_gpus, num_gpu))
-            sys.exit(0)
+            print("No sufficient resource, available: {}, require {} GPU(s)".format(
+                ideal_gpus, num_gpu))
+            sys.exit(1)
         else:
             selected_gpus = list(map(str, ideal_gpus[:num_gpu]))
     else:
@@ -90,6 +134,9 @@ def auto_select_gpu(mem_bound=500, utility_bound=0, gpus=(0, 1, 2, 3, 4, 5, 6, 7
     print("Setting GPU: {}".format(selected_gpus))
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(selected_gpus)
     return selected_gpus
+
+
+
 
 def expand_user(path):
     return os.path.abspath(os.path.expanduser(path))

@@ -5,14 +5,15 @@ from collections import OrderedDict
 import math
 from IPython import embed
 
+
 def compute_integral_part(input, overflow_rate):
     abs_value = input.abs().view(-1)
     sorted_value = abs_value.sort(dim=0, descending=True)[0]
     split_idx = int(overflow_rate * len(sorted_value))
     v = sorted_value[split_idx]
-    if isinstance(v, Variable):
-        v = v.data.cpu().numpy()[0]
-    sf = math.ceil(math.log2(v+1e-12))
+    if isinstance(v, torch.Tensor):
+        v = v.item()  # Convert tensor to scalar
+    sf = math.ceil(math.log2(v + 1e-12))
     return sf
 
 def linear_quantize(input, sf, bits):
@@ -50,22 +51,24 @@ def log_linear_quantize(input, sf, bits):
     v = torch.exp(v) * s
     return v
 
+
 def min_max_quantize(input, bits):
     assert bits >= 1, bits
     if bits == 1:
         return torch.sign(input) - 1
+
     min_val, max_val = input.min(), input.max()
 
-    if isinstance(min_val, Variable):
-        max_val = float(max_val.data.cpu().numpy()[0])
-        min_val = float(min_val.data.cpu().numpy()[0])
+    if isinstance(min_val, torch.Tensor):
+        max_val = max_val.item()  # Convert tensor to scalar
+        min_val = min_val.item()  # Convert tensor to scalar
 
     input_rescale = (input - min_val) / (max_val - min_val)
 
     n = math.pow(2.0, bits) - 1
     v = torch.floor(input_rescale * n + 0.5) / n
 
-    v =  v * (max_val - min_val) + min_val
+    v = v * (max_val - min_val) + min_val
     return v
 
 def tanh_quantize(input, bits):
